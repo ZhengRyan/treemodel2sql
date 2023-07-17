@@ -65,9 +65,9 @@ model = xgb.XGBClassifier(n_estimators=3)
 model.fit(X_train, y_train)
 #xgb.to_graphviz(model)
 ```
-+ 使用xgboost2sql工具包将模型转换成的sql语句
++ 使用treemodel2sql工具包将模型转换成的sql语句
 ```python
-from xgboost2sql import XGBoost2Sql
+from treemodel2sql import XGBoost2Sql
 xgb2sql = XGBoost2Sql()
 sql_str = xgb2sql.transform(model)
 ```
@@ -485,9 +485,9 @@ model = lgb.LGBMClassifier(n_estimators=3)
 model.fit(X_train, y_train)
 lgb.create_tree_digraph(model._Booster, tree_index=0)
 ```
-+ 使用lgb2sql工具包将模型转换成的sql语句
++ 使用treemodel2sql工具包将模型转换成的sql语句
 ```python
-from lgb2sql import Lgb2Sql
+from treemodel2sql import Lgb2Sql
 lgb2sql = Lgb2Sql()
 sql_str = lgb2sql.transform(model)
 ```
