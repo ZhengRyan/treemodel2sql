@@ -26,7 +26,7 @@ class XGBoost2Sql:
     '''
     code_str = ''
 
-    def transform(self, xgboost_model, keep_columns=['key'], table_name='data_table'):
+    def transform(self, xgboost_model, keep_columns=['key'], table_name='data_table', sql_is_format=True):
         """
 
         Args:
@@ -56,7 +56,7 @@ class XGBoost2Sql:
 
             self.code_str += '--tree' + str(i) + '\n'
             is_right = False
-            self.pre_tree(v_lines, is_right, 1)
+            self.pre_tree(v_lines, is_right, 1, sql_is_format)
             columns_l.append('tree_{}_score'.format(i))
             if i == len(tree_list) - 1:
                 self.code_str += '\t\tas tree_{}_score'.format(i)
@@ -110,7 +110,7 @@ class XGBoost2Sql:
                 'xgboost 模型的版本低于1.0.0，如果开发模型时， base_score 参数不是0.5，请将base_score的参数取值带入"-math.log((1 - x) / x)"公式，计算出的值，替换掉生成的sql语句第1句中的+(-0.0)处的-0.0取值')
             return -0.0
 
-    def pre_tree(self, lines, is_right, n):
+    def pre_tree(self, lines, is_right, n, sql_is_format=True):
         """
 
         Args:
@@ -129,12 +129,14 @@ class XGBoost2Sql:
                 tmp = str.split('leaf=')
                 if len(tmp) > 1:
                     if is_right:
-                        format = '\t' * (n - 1)
-                        res = format + 'else\n' + format + '\t' + tmp[1].strip() + '\n' + format + 'end'
+                        if sql_is_format:
+                            format = '\t' * (n - 1)
+                            res = format + 'else\n' + format + '\t' + tmp[1].strip() + '\n' + format + ' end'
+                        else:
+                            res = ' else ' + tmp[1].strip() + ' end'
                     else:
-                        format = '\t' * n
-                        res = format + tmp[1].strip()
-            self.code_str += res + '\n'
+                        res = '\t' * n + tmp[1].strip() if sql_is_format else tmp[1].strip()
+            self.code_str += res + '\n' if sql_is_format else res
             return
         v = lines[0].strip()
         start_index = v.find('[')
@@ -149,24 +151,20 @@ class XGBoost2Sql:
         z_lines = lines[1:]
 
         if is_right:
-            format = '\t' * (n - 1)
-            res = res + format + 'else' + '\n'
+            res = res + '\t' * (n - 1) + 'else' + '\n' if sql_is_format else res + ' else '
         if miss_v == yes_v:
-            format = '\t' * n
-            res = res + format + 'case when (' + v_name + v_value + ' or ' + v_name + ' is null' + ') then'
+            res = res + '\t' * n + 'case when (' + v_name + v_value + ' or ' + v_name + ' is null' + ') then' if sql_is_format else res + 'case when (' + v_name + v_value + ' or ' + v_name + ' is null' + ') then '
         else:
-            format = '\t' * n
-            res = res + format + 'case when (' + v_name + v_value + ' and ' + v_name + ' is null' + ') then'
-        self.code_str += res + '\n'
+            res = res + '\t' * n + 'case when (' + v_name + v_value + ' and ' + v_name + ' is null' + ') then' if sql_is_format else res + 'case when (' + v_name + v_value + ' and ' + v_name + ' is null' + ') then '
+        self.code_str += res + '\n' if sql_is_format else res
         left_right = self.get_tree_str(z_lines, yes_v, no_v)
 
         left_lines = left_right[0]
         right_lines = left_right[1]
-        self.pre_tree(left_lines, False, n)
-        self.pre_tree(right_lines, True, n)
+        self.pre_tree(left_lines, False, n, sql_is_format)
+        self.pre_tree(right_lines, True, n, sql_is_format)
         if is_right:
-            format = '\t' * (n - 1)
-            self.code_str += format + 'end\n'
+            self.code_str += '\t' * (n - 1) + 'end\n' if sql_is_format else ' end'
 
     def get_tree_str(self, lines, yes_flag, no_flag):
         """
@@ -236,6 +234,39 @@ if __name__ == '__main__':
 
     ###使用xgboost2sql包将模型转换成的sql语句
     xgb2sql = XGBoost2Sql()
-    sql_str = xgb2sql.transform(model)
+    #sql_str = xgb2sql.transform(model)
+    sql_str = xgb2sql.transform(model, sql_is_format=False)
     print(sql_str)
-    xgb2sql.save()
+    #xgb2sql.save()
+
+    import pandas as pd
+
+    pd.set_option('display.float_format', lambda x: '%.9f' % x)
+    ###使用模型对测试数据集进行预测
+    test_pred = model.predict_proba(X_test)[:, 1]
+    test_pred = pd.DataFrame(test_pred, columns=['python_pred_res'])
+    test_pred.reset_index(inplace=True)
+    test_pred.rename(columns={'index': 'key'}, inplace=True)
+    print(test_pred)
+
+    ###使用模型转换成的sql语句对测试数据集进行预测
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.getOrCreate()
+
+    X_test_df = pd.DataFrame(X_test)
+    X_test_df.columns = X_test_df.columns.map(lambda x: "f" + str(x))
+    X_test_df.reset_index(inplace=True)
+    X_test_df.rename(columns={'index': 'key'}, inplace=True)
+    values = X_test_df.values.tolist()
+    columns = X_test_df.columns.tolist()
+    spark_df = spark.createDataFrame(values, columns)
+    spark_df.createOrReplaceTempView('data_table')
+    sql_pred_pysdf = spark.sql(sql_str)
+    sql_pred_df = sql_pred_pysdf.toPandas()
+    sql_pred_df.head(2)
+
+    ###对比python模型预测出来的结果和sql语句预测出来的结果是否一致
+    test_pred_sql_pred_df = test_pred.merge(sql_pred_df, on='key')
+    test_pred_sql_pred_df['diff'] = test_pred_sql_pred_df['python_pred_res'] - test_pred_sql_pred_df['score']
+    print(test_pred_sql_pred_df['diff'].describe())

@@ -23,7 +23,7 @@ class Lgb2Sql:
 
     feature_names = []
 
-    def transform(self, lgb_model, keep_columns=['key'], table_name='data_table'):
+    def transform(self, lgb_model, keep_columns=['key'], table_name='data_table', sql_is_format=True):
         """
 
         Args:
@@ -47,7 +47,7 @@ class Lgb2Sql:
         columns_l = []
 
         for i, tree in enumerate(trees):
-            one_tree_code = self.pre_tree(tree['tree_structure'], 1)
+            one_tree_code = self.pre_tree(tree['tree_structure'], 1, sql_is_format)
             if i == len(trees) - 1:
                 trees_func_code_l.append(
                     '--tree' + str(i) + '\n' + one_tree_code + '\n' + '\t\tas tree_{}_score'.format(i))
@@ -75,7 +75,7 @@ class Lgb2Sql:
             lgb_model = lgb_model._Booster
         return lgb_model.dump_model()
 
-    def pre_tree(self, node, n):
+    def pre_tree(self, node, n, sql_is_format=True):
         """
 
         Args:
@@ -87,7 +87,7 @@ class Lgb2Sql:
         """
         n += 1
         if 'leaf_index' in node:
-            return '\t' * n + str(node['leaf_value'])
+            return '\t' * n + str(node['leaf_value']) if sql_is_format else node['leaf_value']
 
         condition = []
         split_feature = self.feature_names[node['split_feature']]
@@ -106,11 +106,14 @@ class Lgb2Sql:
             condition.append(
                 f'{split_feature} is null and {str(is_default_left).lower()}==false or {split_feature}=={threshold}')
 
-        left = self.pre_tree(node['left_child'], n)
-        right = self.pre_tree(node['right_child'], n)
+        left = self.pre_tree(node['left_child'], n, sql_is_format)
+        right = self.pre_tree(node['right_child'], n, sql_is_format)
 
-        strformat = '\t' * n
-        return f'{strformat}case when ({condition[0]}) then\n{left}\n{strformat}else\n{right}\n{strformat}end'
+        if sql_is_format:
+            strformat = '\t' * n
+            return f'{strformat}case when ({condition[0]}) then\n{left}\n{strformat}else\n{right}\n{strformat}end'
+        else:
+            return f'case when ({condition[0]}) then {left} else {right} end'
 
     def save(self, filename='lgb_model.sql'):
         """
@@ -150,6 +153,39 @@ if __name__ == '__main__':
 
     ###使用treemodel2sql包将模型转换成的sql语句
     lgb2sql = Lgb2Sql()
-    sql_str = lgb2sql.transform(model)
+    #sql_str = lgb2sql.transform(model)
+    sql_str = lgb2sql.transform(model,sql_is_format=False)
     print(sql_str)
-    lgb2sql.save()
+    #lgb2sql.save()
+
+    import pandas as pd
+
+    pd.set_option('display.float_format', lambda x: '%.9f' % x)
+    ###使用模型对测试数据集进行预测
+    test_pred = model.predict_proba(X_test)[:, 1]
+    test_pred = pd.DataFrame(test_pred, columns=['python_pred_res'])
+    test_pred.reset_index(inplace=True)
+    test_pred.rename(columns={'index': 'key'}, inplace=True)
+    print(test_pred)
+
+    ###使用模型转换成的sql语句对测试数据集进行预测
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.getOrCreate()
+
+    X_test_df = pd.DataFrame(X_test)
+    X_test_df.columns = X_test_df.columns.map(lambda x: "Column_" + str(x))
+    X_test_df.reset_index(inplace=True)
+    X_test_df.rename(columns={'index': 'key'}, inplace=True)
+    values = X_test_df.values.tolist()
+    columns = X_test_df.columns.tolist()
+    spark_df = spark.createDataFrame(values, columns)
+    spark_df.createOrReplaceTempView('data_table')
+    sql_pred_pysdf = spark.sql(sql_str)
+    sql_pred_df = sql_pred_pysdf.toPandas()
+    sql_pred_df.head(2)
+
+    ###对比python模型预测出来的结果和sql语句预测出来的结果是否一致
+    test_pred_sql_pred_df = test_pred.merge(sql_pred_df, on='key')
+    test_pred_sql_pred_df['diff'] = test_pred_sql_pred_df['python_pred_res'] - test_pred_sql_pred_df['score']
+    print(test_pred_sql_pred_df['diff'].describe())
