@@ -89,7 +89,8 @@ class Lgb2Sql:
         """
         n += 1
         if 'leaf_index' in node:
-            return '\t' * n + str(node['leaf_value']) if sql_is_format else node['leaf_value']
+            leaf_value = round(node['leaf_value'], round_decimal) if round_decimal != -1 else node['leaf_value']
+            return '\t' * n + str(leaf_value) if sql_is_format else leaf_value
 
         condition = []
         split_feature = self.feature_names[node['split_feature']]
@@ -108,8 +109,8 @@ class Lgb2Sql:
             condition.append(
                 f'{split_feature} is null and {str(is_default_left).lower()}==false or {split_feature}=={threshold}')
 
-        left = self.pre_tree(node['left_child'], n, sql_is_format)
-        right = self.pre_tree(node['right_child'], n, sql_is_format)
+        left = self.pre_tree(node['left_child'], n, sql_is_format, round_decimal)
+        right = self.pre_tree(node['right_child'], n, sql_is_format, round_decimal)
 
         if sql_is_format:
             strformat = '\t' * n
