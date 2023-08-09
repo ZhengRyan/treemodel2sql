@@ -6,6 +6,8 @@
 @Author: RyanZheng
 @Email: ryan.zhengrp@gmail.com
 @Created Time on: 2023-07-14
+
+#1.0000000180025095e-35
 '''
 import codecs
 
@@ -23,7 +25,7 @@ class Lgb2Sql:
 
     feature_names = []
 
-    def transform(self, lgb_model, keep_columns=['key'], table_name='data_table', sql_is_format=True):
+    def transform(self, lgb_model, keep_columns=['key'], table_name='data_table', sql_is_format=True, round_decimal=-1):
         """
 
         Args:
@@ -47,7 +49,7 @@ class Lgb2Sql:
         columns_l = []
 
         for i, tree in enumerate(trees):
-            one_tree_code = self.pre_tree(tree['tree_structure'], 1, sql_is_format)
+            one_tree_code = self.pre_tree(tree['tree_structure'], 1, sql_is_format, round_decimal)
             if i == len(trees) - 1:
                 trees_func_code_l.append(
                     '--tree' + str(i) + '\n' + one_tree_code + '\n' + '\t\tas tree_{}_score'.format(i))
@@ -75,7 +77,7 @@ class Lgb2Sql:
             lgb_model = lgb_model._Booster
         return lgb_model.dump_model()
 
-    def pre_tree(self, node, n, sql_is_format=True):
+    def pre_tree(self, node, n, sql_is_format=True, round_decimal=-1):
         """
 
         Args:
@@ -94,13 +96,13 @@ class Lgb2Sql:
         is_default_left = node['default_left']
 
         if node['decision_type'] == '<=' or node['decision_type'] == 'no_greater':
-            threshold = node['threshold']
+            threshold = round(node['threshold'], round_decimal) if round_decimal != -1 else node['threshold']
             if 'e' in str(threshold):
                 threshold = format(threshold, 'f')
             condition.append(
                 f'{split_feature} is null and {str(is_default_left).lower()}==true or {split_feature}<={threshold}')
         else:
-            threshold = node['threshold']
+            threshold = round(node['threshold'], round_decimal) if round_decimal != -1 else node['threshold']
             if 'e' in str(threshold):
                 threshold = format(threshold, 'f')
             condition.append(
@@ -154,7 +156,8 @@ if __name__ == '__main__':
     ###使用treemodel2sql包将模型转换成的sql语句
     lgb2sql = Lgb2Sql()
     #sql_str = lgb2sql.transform(model)
-    sql_str = lgb2sql.transform(model,sql_is_format=False)
+    #sql_str = lgb2sql.transform(model, sql_is_format=False)
+    sql_str = lgb2sql.transform(model,sql_is_format=False,round_decimal=4)
     print(sql_str)
     #lgb2sql.save()
 

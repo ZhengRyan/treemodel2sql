@@ -14,6 +14,7 @@ import math
 import warnings
 
 import xgboost
+from decimal import Decimal
 
 
 class XGBoost2Sql:
@@ -26,7 +27,8 @@ class XGBoost2Sql:
     '''
     code_str = ''
 
-    def transform(self, xgboost_model, keep_columns=['key'], table_name='data_table', sql_is_format=True):
+    def transform(self, xgboost_model, keep_columns=['key'], table_name='data_table', sql_is_format=True,
+                  round_decimal=-1):
         """
 
         Args:
@@ -56,7 +58,7 @@ class XGBoost2Sql:
 
             self.code_str += '--tree' + str(i) + '\n'
             is_right = False
-            self.pre_tree(v_lines, is_right, 1, sql_is_format)
+            self.pre_tree(v_lines, is_right, 1, sql_is_format, round_decimal)
             columns_l.append('tree_{}_score'.format(i))
             if i == len(tree_list) - 1:
                 self.code_str += '\t\tas tree_{}_score'.format(i)
@@ -110,7 +112,7 @@ class XGBoost2Sql:
                 'xgboost 模型的版本低于1.0.0，如果开发模型时， base_score 参数不是0.5，请将base_score的参数取值带入"-math.log((1 - x) / x)"公式，计算出的值，替换掉生成的sql语句第1句中的+(-0.0)处的-0.0取值')
             return -0.0
 
-    def pre_tree(self, lines, is_right, n, sql_is_format=True):
+    def pre_tree(self, lines, is_right, n, sql_is_format=True, round_decimal=-1):
         """
 
         Args:
@@ -124,18 +126,19 @@ class XGBoost2Sql:
         n += 1
         res = ''
         if len(lines) <= 1:
-            str = lines[0].strip()
-            if 'leaf=' in str:
-                tmp = str.split('leaf=')
+            str_row = lines[0].strip()
+            if 'leaf=' in str_row:
+                tmp = str_row.split('leaf=')
                 if len(tmp) > 1:
+                    v_value = str(round(Decimal(tmp[1].strip()), round_decimal)) if round_decimal != -1 else tmp[1].strip()
                     if is_right:
                         if sql_is_format:
                             format = '\t' * (n - 1)
-                            res = format + 'else\n' + format + '\t' + tmp[1].strip() + '\n' + format + ' end'
+                            res = format + 'else\n' + format + '\t' + v_value + '\n' + format + ' end'
                         else:
-                            res = ' else ' + tmp[1].strip() + ' end'
+                            res = ' else ' + v_value + ' end'
                     else:
-                        res = '\t' * n + tmp[1].strip() if sql_is_format else tmp[1].strip()
+                        res = '\t' * n + v_value if sql_is_format else v_value
             self.code_str += res + '\n' if sql_is_format else res
             return
         v = lines[0].strip()
@@ -143,7 +146,7 @@ class XGBoost2Sql:
         median_index = v.find('<')
         end_index = v.find(']')
         v_name = v[start_index + 1:median_index].strip()
-        v_value = v[median_index:end_index]
+        v_value = str(round(Decimal(v[median_index+1:end_index]), round_decimal)) if round_decimal != -1 else v[median_index+1:end_index]
         ynm = v[end_index + 1:].strip().split(',')
         yes_v = int(ynm[0].replace('yes=', '').strip())
         no_v = int(ynm[1].replace('no=', '').strip())
@@ -153,16 +156,16 @@ class XGBoost2Sql:
         if is_right:
             res = res + '\t' * (n - 1) + 'else' + '\n' if sql_is_format else res + ' else '
         if miss_v == yes_v:
-            res = res + '\t' * n + 'case when (' + v_name + v_value + ' or ' + v_name + ' is null' + ') then' if sql_is_format else res + 'case when (' + v_name + v_value + ' or ' + v_name + ' is null' + ') then '
+            res = res + '\t' * n + 'case when (' + v_name + ' < ' + v_value + ' or ' + v_name + ' is null' + ') then' if sql_is_format else res + 'case when (' + v_name + ' < ' + v_value + ' or ' + v_name + ' is null' + ') then '
         else:
-            res = res + '\t' * n + 'case when (' + v_name + v_value + ' and ' + v_name + ' is null' + ') then' if sql_is_format else res + 'case when (' + v_name + v_value + ' and ' + v_name + ' is null' + ') then '
+            res = res + '\t' * n + 'case when (' + v_name + ' < ' + v_value + ' and ' + v_name + ' is null' + ') then' if sql_is_format else res + 'case when (' + v_name + ' < ' + v_value + ' and ' + v_name + ' is null' + ') then '
         self.code_str += res + '\n' if sql_is_format else res
         left_right = self.get_tree_str(z_lines, yes_v, no_v)
 
         left_lines = left_right[0]
         right_lines = left_right[1]
-        self.pre_tree(left_lines, False, n, sql_is_format)
-        self.pre_tree(right_lines, True, n, sql_is_format)
+        self.pre_tree(left_lines, False, n, sql_is_format, round_decimal)
+        self.pre_tree(right_lines, True, n, sql_is_format, round_decimal)
         if is_right:
             self.code_str += '\t' * (n - 1) + 'end\n' if sql_is_format else ' end'
 
@@ -234,9 +237,10 @@ if __name__ == '__main__':
 
     ###使用xgboost2sql包将模型转换成的sql语句
     xgb2sql = XGBoost2Sql()
-    #sql_str = xgb2sql.transform(model)
-    sql_str = xgb2sql.transform(model, sql_is_format=False)
-    print(sql_str)
+    # sql_str = xgb2sql.transform(model)
+    # sql_str = xgb2sql.transform(model, sql_is_format=False)
+    sql_str = xgb2sql.transform(model, sql_is_format=False, round_decimal=4)
+    #print(sql_str)
     #xgb2sql.save()
 
     import pandas as pd
