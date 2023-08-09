@@ -2,7 +2,7 @@
 
 __author__ = """RyanZheng"""
 __email__ = 'zhengruiping000@163.com'
-__version__ = '0.1.4'
+__version__ = '0.1.5'
 
 from .xgboost2sql import XGBoost2Sql
 from .lgb2sql import Lgb2Sql
